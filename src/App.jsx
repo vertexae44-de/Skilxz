@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from "react";
+import { supabase } from "./lib/supabaseClient";
 
 /* ─────────────────────────  DATA  ───────────────────────── */
 
@@ -545,22 +546,22 @@ const KEY = "skilxz:v1";
 
 async function loadSave() {
   try {
-    const r = await window.storage.get(KEY);
-    return r ? JSON.parse(r.value) : null;
+    const r = window.localStorage.getItem(KEY);
+    return r ? JSON.parse(r) : null;
   } catch {
     return null;
   }
 }
 async function writeSave(v) {
   try {
-    await window.storage.set(KEY, JSON.stringify(v));
+    window.localStorage.setItem(KEY, JSON.stringify(v));
     return true;
   } catch {
     return false;
   }
 }
 async function wipeSave() {
-  try { await window.storage.delete(KEY); } catch {}
+  try { window.localStorage.removeItem(KEY); } catch {}
 }
 
 const ago = (iso) => {
@@ -616,6 +617,7 @@ export default function Skilxz() {
   const [enrolled, setEnrolled] = useState(START_ENROLLED);
   const [hydrated, setHydrated] = useState(false);
   const [saveState, setSaveState] = useState("idle");
+  const [pendingProfile, setPendingProfile] = useState(null);
 
   useEffect(() => {
     const t = setTimeout(() => setOn(true), 60);
@@ -716,6 +718,46 @@ export default function Skilxz() {
     setAiReset((r) => (Date.now() >= r ? Date.now() + AI_WINDOW : r));
   };
 
+  const start = (u) => {
+    const email = String(u.email || "").trim().toLowerCase();
+    setUser(u);
+    if (isComped(email)) {
+      setTier("life");
+      setTierEmail(email);
+      setToast("Founder account — Lifetime unlocked");
+    } else if (tierEmail !== email) {
+      // A plan belongs to the account that bought it, not the handset.
+      setTier("free");
+      setTierEmail(email);
+    }
+    setPendingProfile(null);
+  };
+
+  // Pick up a real Supabase session — on load, and whenever sign-in/out
+  // happens (password login, Google OAuth redirect, email verification).
+  // If the account already has onboarding data saved, sign straight in;
+  // otherwise route into the level/goal/why steps to collect it.
+  useEffect(() => {
+    if (!hydrated || user) return;
+    let dead = false;
+    const applySession = (session) => {
+      if (dead || !session) return;
+      const meta = session.user.user_metadata || {};
+      const email = session.user.email;
+      if (meta.lvl) {
+        start({ name: meta.name || email.split("@")[0], email, lvl: meta.lvl, goal: meta.goal || [], why: meta.why || "", age: meta.age ?? null });
+      } else {
+        setPendingProfile({ name: meta.name || email.split("@")[0], email });
+      }
+    };
+    supabase.auth.getSession().then(({ data }) => applySession(data.session));
+    const { data: sub } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session) applySession(session);
+      else setPendingProfile(null);
+    });
+    return () => { dead = true; sub.subscription.unsubscribe(); };
+  }, [hydrated, user]);
+
   const finish = (w) => {
     const gained = XP_AWARD.workout;
     setPlayer(null);
@@ -734,21 +776,7 @@ export default function Skilxz() {
     return (
       <div className={`skx ${theme}${on ? " on" : ""}`}>
         <style>{CSS}</style>
-        <Auth
-          start={(u) => {
-            const email = String(u.email || "").trim().toLowerCase();
-            setUser(u);
-            if (isComped(email)) {
-              setTier("life");
-              setTierEmail(email);
-              setToast("Founder account — Lifetime unlocked");
-            } else if (tierEmail !== email) {
-              // A plan belongs to the account that bought it, not the handset.
-              setTier("free");
-              setTierEmail(email);
-            }
-          }}
-        />
+        <Auth start={start} pendingProfile={pendingProfile} />
       </div>
     );
   }
@@ -757,7 +785,7 @@ export default function Skilxz() {
     meals, numbers, setNumbers,
     addMeal: (m) => setMeals((x) => [...x, m]),
     delMeal: (id) => setMeals((x) => x.filter((m) => m.id !== id)),
-    theme, setTheme, user, signOut: () => setUser(null), openEx: setExDetail,
+    theme, setTheme, user, signOut: () => { supabase.auth.signOut(); setUser(null); }, openEx: setExDetail,
     tier, pro: has(tier, "pro"), premium: has(tier, "premium"),
     caps: capsFor(user && typeof user.age === "number" ? user.age : 25),
     upgrade: () => { setTab("you"); setPlansOpen(true); },
@@ -968,7 +996,8 @@ function Home({ sheet, play, reps, setReps, openCore, openGame, online, user }) 
   const [node, setNode] = useState(3);
   const lvl = (user && user.lvl) || "Intermediate";
   const pool = WORKOUTS.filter((x) => x.lvl === lvl);
-  const base = (pool.length ? pool : WORKOUTS)[new Date().getDay() % (pool.length || WORKOUTS.length)];
+  const dayIndex = Math.floor(Date.now() / 86400000);
+  const base = (pool.length ? pool : WORKOUTS)[dayIndex % (pool.length || WORKOUTS.length)];
   const w = { ...base, lvl, ex: sessionFor(base.ex, lvl) };
   const route = CHAINS[0];
   const rail = route.steps.map((st) => stepInfo(st, SEED_PROGRESS));
@@ -997,7 +1026,7 @@ function Home({ sheet, play, reps, setReps, openCore, openGame, online, user }) 
         </div>
       </div>
 
-      <div className="rise d2"><Head l="Today" r="8-week Strength · W3 D2" /></div>
+      <div className="rise d2"><Head l="Today" r={new Date().toLocaleDateString(undefined, { weekday: "long" })} /></div>
 
       <section className="card rise d2">
         <div className="herotop">
@@ -3300,14 +3329,6 @@ const CODE_LEN = 6;
 const RESEND_WAIT = 60;      // seconds
 const MAX_TRIES = 5;
 
-const makeCode = () => String(Math.floor(Math.random() * 900000) + 100000);
-
-/* Swap this for your mail provider — Supabase auth.signInWithOtp,
-   Resend, Postmark, SendGrid. Everything else about the flow stays put. */
-async function sendCode(email, code) {
-  console.info(`[skilxz] verification code for ${email}: ${code}`);
-  return { ok: true };
-}
 const ageFrom = (d) => {
   const b = new Date(d);
   if (!d || isNaN(b.getTime())) return null;
@@ -3346,7 +3367,7 @@ const GOALS = [
   "Muscle-up", "Handstand", "Front lever", "Lose fat", "Stay consistent",
 ];
 
-function Verify({ email, code, devCode, sentAt, tries, setTries, onResend, onDone, onBack }) {
+function Verify({ email, sentAt, tries, setTries, onResend, onDone, onBack }) {
   const [digits, setDigits] = useState(Array(CODE_LEN).fill(""));
   const [err, setErr] = useState(null);
   const [shake, setShake] = useState(false);
@@ -3364,9 +3385,10 @@ function Verify({ email, code, devCode, sentAt, tries, setTries, onResend, onDon
 
   const locked = tries >= MAX_TRIES;
 
-  const submit = (value) => {
+  const submit = async (value) => {
     if (locked) return;
-    if (value === code) { onDone(); return; }
+    const { error } = await supabase.auth.verifyOtp({ email, token: value, type: "signup" });
+    if (!error) { onDone(); return; }
     const n = tries + 1;
     setTries(n);
     setDigits(Array(CODE_LEN).fill(""));
@@ -3447,13 +3469,6 @@ function Verify({ email, code, devCode, sentAt, tries, setTries, onResend, onDon
           )}
         </div>
 
-        <div className="devnote">
-          <span className="eyebrow">No mail service connected</span>
-          <p>
-            Nothing was actually emailed. Your code is <b>{devCode}</b>. Wire up{" "}
-            <code>sendCode()</code> in the source and this notice goes away.
-          </p>
-        </div>
       </div>
 
       <div className="authfoot">
@@ -3463,10 +3478,10 @@ function Verify({ email, code, devCode, sentAt, tries, setTries, onResend, onDon
   );
 }
 
-function Auth({ start }) {
-  const [mode, setMode] = useState("welcome");
-  const [name, setName] = useState("");
-  const [email, setEmail] = useState("");
+function Auth({ start, pendingProfile }) {
+  const [mode, setMode] = useState(pendingProfile ? "level" : "welcome");
+  const [name, setName] = useState(pendingProfile?.name || "");
+  const [email, setEmail] = useState(pendingProfile?.email || "");
   const [pw, setPw] = useState("");
   const [show, setShow] = useState(false);
   const [err, setErr] = useState({});
@@ -3475,17 +3490,22 @@ function Auth({ start }) {
   const [goal, setGoal] = useState([]);
   const [why, setWhy] = useState(null);
   const [dob, setDob] = useState("");
-  const [code, setCode] = useState("");
-  const [devCode, setDevCode] = useState("");
   const [sentAt, setSentAt] = useState(0);
   const [tries, setTries] = useState(0);
+
+  useEffect(() => {
+    if (pendingProfile && mode === "welcome") {
+      setName(pendingProfile.name);
+      setEmail(pendingProfile.email);
+      setMode("level");
+    }
+  }, [pendingProfile]);
 
   const okEmail = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
   const strength = pw.length >= 12 && /[^a-zA-Z0-9]/.test(pw) ? 3 : pw.length >= 8 ? 2 : pw.length >= 5 ? 1 : 0;
   const STR = ["", "Too short", "Good", "Strong"];
-  const guest = { name: "Athlete", email: "guest@skilxz.app", lvl: "Intermediate", goal: "Muscle-up" };
 
-  const submit = () => {
+  const submit = async () => {
     const e = {};
     if (mode === "signup" && name.trim().length < 2) e.name = "Tell us what to call you.";
     if (!okEmail) e.email = email ? "That doesn't look like an email address." : "Enter your email.";
@@ -3500,19 +3520,19 @@ function Auth({ start }) {
     setErr(e);
     if (Object.keys(e).length) return;
     setBusy(true);
-    setTimeout(() => {
+    if (mode === "signup") {
+      const { error } = await supabase.auth.signUp({ email, password: pw, options: { data: { name: name.trim() } } });
       setBusy(false);
-      if (mode === "signup") {
-        const c = makeCode();
-        setCode(c);
-        setSentAt(Date.now());
-        setTries(0);
-        sendCode(email, c);
-        setDevCode(c);
-        setMode("verify");
-      }
-      else start({ name: email.split("@")[0], email, lvl: "Intermediate", goal: ["Build muscle", "Learn skills"], why: "Get genuinely strong", age: 28 });
-    }, 600);
+      if (error) { setErr({ email: error.message }); return; }
+      setSentAt(Date.now());
+      setTries(0);
+      setMode("verify");
+    } else {
+      const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
+      setBusy(false);
+      if (error) { setErr({ pw: "Incorrect email or password." }); return; }
+      // A valid session is now live — the app-level listener picks it up from here.
+    }
   };
 
   if (mode === "welcome") {
@@ -3533,8 +3553,13 @@ function Auth({ start }) {
           <button className="btn outline" onClick={() => setMode("login")}>I already have one</button>
           <div className="or"><span>or</span></div>
           <div className="btnrow">
-            <button className="btn ghost" onClick={() => start(guest)}>Apple</button>
-            <button className="btn ghost" onClick={() => start(guest)}>Google</button>
+            <button className="btn ghost" disabled title="Coming soon">Apple</button>
+            <button
+              className="btn ghost"
+              onClick={() => supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: window.location.origin } })}
+            >
+              Google
+            </button>
           </div>
           <p className="fine" style={{ marginTop: 16 }}>
             By continuing you agree to the terms and privacy policy. You must be 13 or older to create an account.
@@ -3548,18 +3573,13 @@ function Auth({ start }) {
     return (
       <Verify
         email={email}
-        code={code}
-        devCode={devCode}
         sentAt={sentAt}
         tries={tries}
         setTries={setTries}
-        onResend={() => {
-          const c = makeCode();
-          setCode(c);
+        onResend={async () => {
           setSentAt(Date.now());
           setTries(0);
-          sendCode(email, c);
-          setDevCode(c);
+          await supabase.auth.resend({ type: "signup", email });
         }}
         onDone={() => setMode("level")}
         onBack={() => setMode("signup")}
@@ -3567,24 +3587,35 @@ function Auth({ start }) {
     );
   }
 
-  if (mode === "level" || mode === "goal" || mode === "why") {
-    const STEPS = ["level", "goal", "why"];
+  if (mode === "dob" || mode === "level" || mode === "goal" || mode === "why") {
+    const STEPS = pendingProfile ? ["dob", "level", "goal", "why"] : ["level", "goal", "why"];
     const idx = STEPS.indexOf(mode);
     const copy = {
+      dob: ["When were you born?", "Keeps a couple of features age-appropriate. Never shown to anyone else."],
       level: ["Where are you now?", "This sets your starting point on the skill tree. You can retest any time."],
       goal: ["What are you chasing?", "Pick as many as you like — it shapes what the app puts in front of you."],
       why: ["And why?", "The honest answer. It's what the coach leans on when a week goes badly."],
     }[mode];
-    const ready = mode === "level" ? !!lvl : mode === "goal" ? goal.length > 0 : !!why;
+    const ready = mode === "dob" ? ageFrom(dob) !== null : mode === "level" ? !!lvl : mode === "goal" ? goal.length > 0 : !!why;
 
     return (
       <div className="auth">
         <div className="authtop narrow">
-          <span className="eyebrow">Step {idx + 1} of 3</span>
+          <span className="eyebrow">Step {idx + 1} of {STEPS.length}</span>
           <h1 className="disp authh">{copy[0]}</h1>
           <p className="meta">{copy[1]}</p>
 
           <div className="obwrap">
+            {mode === "dob" && (
+              <label className="field">
+                <span className="eyebrow">Date of birth</span>
+                <input className="input" type="date" value={dob}
+                  max={new Date().toISOString().slice(0, 10)} autoComplete="bday"
+                  onChange={(e) => setDob(e.target.value)} />
+                <span className="hint">You need to be {MIN_AGE} or older to use Skilxz.</span>
+              </label>
+            )}
+
             {mode === "level" &&
               LEVELS.map(([k, d]) => (
                 <button key={k} className={`ob${lvl === k ? " on" : ""}`} onClick={() => setLvl(k)}>
@@ -3621,15 +3652,26 @@ function Auth({ start }) {
           <button
             className="btn primary"
             disabled={!ready}
-            onClick={() =>
-              idx < 2
-                ? setMode(STEPS[idx + 1])
-                : start({ name: name.trim(), email, lvl, goal, why, age: ageFrom(dob) })
-            }
+            onClick={async () => {
+              if (idx < STEPS.length - 1) { setMode(STEPS[idx + 1]); return; }
+              const age = ageFrom(dob);
+              await supabase.auth.updateUser({ data: { name: name.trim(), lvl, goal, why, age } }).catch(() => {});
+              start({ name: name.trim(), email, lvl, goal, why, age });
+            }}
           >
-            {idx === 2 ? "Start training" : mode === "goal" && goal.length ? `Continue (${goal.length})` : "Continue"}
+            {idx === STEPS.length - 1 ? "Start training" : mode === "goal" && goal.length ? `Continue (${goal.length})` : "Continue"}
           </button>
-          <button className="peek" onClick={() => setMode(idx === 0 ? "signup" : STEPS[idx - 1])}>Back</button>
+          <button
+            className="peek"
+            onClick={() => {
+              if (idx === 0) {
+                if (pendingProfile) { supabase.auth.signOut(); setMode("welcome"); }
+                else setMode("signup");
+              } else setMode(STEPS[idx - 1]);
+            }}
+          >
+            Back
+          </button>
         </div>
       </div>
     );
