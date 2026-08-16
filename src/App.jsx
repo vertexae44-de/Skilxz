@@ -240,13 +240,6 @@ const PROGRAMS = [
   { id: "p7", free: false, t: "Full-body Program", wk: 6, dw: 3, lvl: "Intermediate", d: "One session, everything covered. For busy weeks." },
 ];
 
-/* Enrolment is a list, not a single slot — people reasonably run a
-   strength block and a skill programme side by side. */
-const START_ENROLLED = [
-  { id: "p2", prog: 0.46 },
-  { id: "p5", prog: 0.12 },
-  { id: "p3", prog: 1 },
-];
 const SOFT_CAP = 3;
 
 /* ─────────────────  SKILLS  ─────────────────
@@ -477,21 +470,12 @@ const PRS = [
   { n: "Tuck front lever", v: "14", u: "sec", d: "4 days ago", up: true },
 ];
 
-const HISTORY = [
-  { t: "Pull-up strength", d: "Yesterday", min: 38, xp: 240, cat: "Pull" },
-  { t: "Mobility reset", d: "2 days ago", min: 18, xp: 90, cat: "Mobility" },
-  { t: "Legs, no weights", d: "3 days ago", min: 32, xp: 210, cat: "Legs" },
-  { t: "Core under tension", d: "5 days ago", min: 22, xp: 140, cat: "Core & Abs" },
-  { t: "Push foundations", d: "6 days ago", min: 24, xp: 150, cat: "Push" },
-  { t: "Handstand practice", d: "1 week ago", min: 25, xp: 160, cat: "Skill" },
-];
-
 const BADGES = [
-  { n: "First rep", d: "Complete one workout", got: true },
-  { n: "Ten in a row", d: "10-day streak", got: true },
-  { n: "Century", d: "100 push-ups in a day", got: true },
-  { n: "Bar rat", d: "25 pull sessions", got: true },
-  { n: "Upside down", d: "60s wall handstand", got: true },
+  { n: "First rep", d: "Complete one workout", got: false },
+  { n: "Ten in a row", d: "10-day streak", got: false },
+  { n: "Century", d: "100 push-ups in a day", got: false },
+  { n: "Bar rat", d: "25 pull sessions", got: false },
+  { n: "Upside down", d: "60s wall handstand", got: false },
   { n: "Iron grip", d: "2-minute dead hang", got: false },
   { n: "Muscle-up", d: "Clear the muscle-up node", got: false },
   { n: "Unbroken", d: "50-day streak", got: false },
@@ -573,10 +557,23 @@ const ago = (iso) => {
   return `${Math.floor(d / 7)} weeks ago`;
 };
 
-const SEED_HISTORY = HISTORY.map((h, i) => ({
-  id: 1000 + i, t: h.t, cat: h.cat, min: h.min, xp: h.xp,
-  at: new Date(Date.now() - (i + 1) * 86400000).toISOString(),
-}));
+/* Real streak from logged history — a run of trained days ending today,
+   plus a hit/miss map for the last 7 days. Empty history = 0, honestly. */
+const streakFrom = (history) => {
+  const days = new Set(history.map((h) => new Date(h.at).toDateString()));
+  let streak = 0;
+  const d = new Date();
+  while (days.has(d.toDateString())) {
+    streak++;
+    d.setDate(d.getDate() - 1);
+  }
+  const last7 = Array.from({ length: 7 }, (_, i) => {
+    const day = new Date();
+    day.setDate(day.getDate() - (6 - i));
+    return days.has(day.toDateString()) ? 1 : 0;
+  });
+  return { streak, last7 };
+};
 
 /* ─────────────────────────  APP  ───────────────────────── */
 
@@ -585,9 +582,9 @@ export default function Skilxz() {
   const [sheet, setSheet] = useState(null);
   const [player, setPlayer] = useState(null);
   const [on, setOn] = useState(false);
-  const [reps, setReps] = useState(42);
-  const [xp, setXp] = useState(4820);
-  const [done, setDone] = useState(11);
+  const [reps, setReps] = useState(0);
+  const [xp, setXp] = useState(0);
+  const [done, setDone] = useState(0);
   const [toast, setToast] = useState(null);
   const [vals, setVals] = useState(() => Object.fromEntries(TESTS.map((t) => [t.k, t.val])));
   const [assess, setAssess] = useState(false);
@@ -612,9 +609,9 @@ export default function Skilxz() {
   const audio = useRef(null);
   const [core, setCore] = useState(false);
   const [exDetail, setExDetail] = useState(null);
-  const [history, setHistory] = useState(SEED_HISTORY);
-  const [splitDone, setSplitDone] = useState([0, 1, 2]);
-  const [enrolled, setEnrolled] = useState(START_ENROLLED);
+  const [history, setHistory] = useState([]);
+  const [splitDone, setSplitDone] = useState([]);
+  const [enrolled, setEnrolled] = useState([]);
   const [hydrated, setHydrated] = useState(false);
   const [saveState, setSaveState] = useState("idle");
   const [pendingProfile, setPendingProfile] = useState(null);
@@ -991,7 +988,8 @@ function Ring({ pct, size = 76, w = 5, label, sub, on = true }) {
 
 /* ─────────────────  HOME  ───────────────── */
 
-function Home({ sheet, play, reps, setReps, openCore, openGame, online, user }) {
+function Home({ sheet, play, reps, setReps, openCore, openGame, online, user, history, done }) {
+  const { streak, last7 } = streakFrom(history);
   const [exp, setExp] = useState(false);
   const [node, setNode] = useState(3);
   const lvl = (user && user.lvl) || "Intermediate";
@@ -1018,10 +1016,10 @@ function Home({ sheet, play, reps, setReps, openCore, openGame, online, user }) 
       )}
 
       <div className="streak rise d1">
-        <div className="stnum"><b>12</b><span className="eyebrow">day streak</span></div>
+        <div className="stnum"><b>{streak}</b><span className="eyebrow">day streak</span></div>
         <div className="dots">
-          {[1, 1, 1, 1, 0, 0, 0].map((h, i) => (
-            <span key={i} className={`dot${h ? " hit" : i === 4 ? " now" : ""}`} />
+          {last7.map((h, i) => (
+            <span key={i} className={`dot${h ? " hit" : i === 6 ? " now" : ""}`} />
           ))}
         </div>
       </div>
@@ -1035,7 +1033,7 @@ function Home({ sheet, play, reps, setReps, openCore, openGame, online, user }) 
             <h2 className="disp herotitle">{w.t}</h2>
             <p className="meta">{w.ex.length} exercises · {w.min} min · {w.eq} · {lvl}</p>
           </div>
-          <Ring pct={11 / 24} label="11/24" sub="sessions" />
+          <Ring pct={done / 24} label={`${done}/24`} sub="sessions" />
         </div>
 
         <button className="btn primary" onClick={() => play(w)}>Start workout</button>
@@ -1990,9 +1988,9 @@ function You({ xp, setToast, vals, retest, theme, setTheme, user, signOut, tier,
 
       <div className="tiles rise d1">
         <Tile v={lvl} l="Level" s={`${xp} XP`} hot />
-        <Tile v="2" l="Programs" s="completed" />
-        <Tile v="8,412" l="Total reps" s="all time" />
-        <Tile v="5" l="Badges" s="of 8" />
+        <Tile v="0" l="Programs" s="completed" />
+        <Tile v="0" l="Total reps" s="all time" />
+        <Tile v={BADGES.filter((b) => b.got).length} l="Badges" s={`of ${BADGES.length}`} />
       </div>
 
       <div className="rise d2"><Head l="Accent" r="Changes the whole app" /></div>
@@ -2035,7 +2033,7 @@ function You({ xp, setToast, vals, retest, theme, setTheme, user, signOut, tier,
         ))}
       </div>
 
-      <div className="rise d3"><Head l="Achievements" r="5 of 8" /></div>
+      <div className="rise d3"><Head l="Achievements" r={`${BADGES.filter((b) => b.got).length} of ${BADGES.length}`} /></div>
       <div className="badges rise d3">
         {BADGES.map((b) => (
           <div key={b.n} className={`badge${b.got ? " got" : ""}`}>
@@ -3178,7 +3176,7 @@ const MATRIX = [
 /* Accounts that get Lifetime automatically — the creator's own.
    Client-side only, so treat it as convenience, not security: anyone can
    read this list in the bundle. Move it server-side with real auth. */
-const COMPED = ["vertex.ae.44@gmail.com", "noxx920@gmail.com"];
+const COMPED = [];
 const isComped = (e) => COMPED.includes(String(e || "").trim().toLowerCase());
 
 const RANK = { free: 0, pro: 1, premium: 2, life: 3 };
