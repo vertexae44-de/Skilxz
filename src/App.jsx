@@ -3325,10 +3325,6 @@ const MEALPLAN = [
 
 const MIN_AGE = 13;
 
-const CODE_LEN = 6;
-const RESEND_WAIT = 60;      // seconds
-const MAX_TRIES = 5;
-
 const ageFrom = (d) => {
   const b = new Date(d);
   if (!d || isNaN(b.getTime())) return null;
@@ -3367,65 +3363,16 @@ const GOALS = [
   "Muscle-up", "Handstand", "Front lever", "Lose fat", "Stay consistent",
 ];
 
-function Verify({ email, sentAt, tries, setTries, onResend, onDone, onBack }) {
-  const [digits, setDigits] = useState(Array(CODE_LEN).fill(""));
-  const [err, setErr] = useState(null);
-  const [shake, setShake] = useState(false);
-  const [wait, setWait] = useState(RESEND_WAIT);
-  const boxes = useRef([]);
-
-  useEffect(() => { boxes.current[0] && boxes.current[0].focus(); }, []);
+function CheckEmail({ email, sentAt, onResend, onBack }) {
+  const [wait, setWait] = useState(60);
+  const [sent, setSent] = useState(false);
 
   useEffect(() => {
-    const tick = () => setWait(Math.max(RESEND_WAIT - Math.floor((Date.now() - sentAt) / 1000), 0));
+    const tick = () => setWait(Math.max(60 - Math.floor((Date.now() - sentAt) / 1000), 0));
     tick();
     const t = setInterval(tick, 1000);
     return () => clearInterval(t);
   }, [sentAt]);
-
-  const locked = tries >= MAX_TRIES;
-
-  const submit = async (value) => {
-    if (locked) return;
-    const { error } = await supabase.auth.verifyOtp({ email, token: value, type: "signup" });
-    if (!error) { onDone(); return; }
-    const n = tries + 1;
-    setTries(n);
-    setDigits(Array(CODE_LEN).fill(""));
-    setShake(true);
-    setTimeout(() => setShake(false), 400);
-    setErr(n >= MAX_TRIES ? "Too many attempts. Send yourself a new code." : `That code isn't right. ${MAX_TRIES - n} attempt${MAX_TRIES - n === 1 ? "" : "s"} left.`);
-    boxes.current[0] && boxes.current[0].focus();
-  };
-
-  const put = (i, v) => {
-    const d = v.replace(/\D/g, "").slice(-1);
-    const next = [...digits];
-    next[i] = d;
-    setDigits(next);
-    setErr(null);
-    if (d && i < CODE_LEN - 1) boxes.current[i + 1] && boxes.current[i + 1].focus();
-    if (next.every((x) => x)) submit(next.join(""));
-  };
-
-  const key = (i, e) => {
-    if (e.key === "Backspace" && !digits[i] && i > 0) boxes.current[i - 1] && boxes.current[i - 1].focus();
-    if (e.key === "ArrowLeft" && i > 0) boxes.current[i - 1] && boxes.current[i - 1].focus();
-    if (e.key === "ArrowRight" && i < CODE_LEN - 1) boxes.current[i + 1] && boxes.current[i + 1].focus();
-  };
-
-  const paste = (e) => {
-    const text = (e.clipboardData.getData("text") || "").replace(/\D/g, "").slice(0, CODE_LEN);
-    if (!text) return;
-    e.preventDefault();
-    const next = Array(CODE_LEN).fill("");
-    text.split("").forEach((c, k) => { next[k] = c; });
-    setDigits(next);
-    setErr(null);
-    const last = Math.min(text.length, CODE_LEN - 1);
-    boxes.current[last] && boxes.current[last].focus();
-    if (text.length === CODE_LEN) submit(text);
-  };
 
   return (
     <div className="auth">
@@ -3435,40 +3382,19 @@ function Verify({ email, sentAt, tries, setTries, onResend, onDone, onBack }) {
         </button>
         <h1 className="disp authh">Check your email</h1>
         <p className="meta">
-          We've sent a {CODE_LEN}-digit code to <b className="emailhl">{email}</b>. Enter it below to finish setting
-          up your account.
+          We've sent a confirmation link to <b className="emailhl">{email}</b>. Open it to finish setting up your
+          account — this page will pick up automatically once you do.
         </p>
 
-        <div className={`codebox${shake ? " shake" : ""}`} onPaste={paste}>
-          {digits.map((d, i) => (
-            <input
-              key={i}
-              ref={(el) => { boxes.current[i] = el; }}
-              className={`codedigit${err ? " bad" : ""}${d ? " filled" : ""}`}
-              value={d}
-              onChange={(e) => put(i, e.target.value)}
-              onKeyDown={(e) => key(i, e)}
-              inputMode="numeric"
-              autoComplete={i === 0 ? "one-time-code" : "off"}
-              maxLength={1}
-              disabled={locked}
-              aria-label={`Digit ${i + 1}`}
-            />
-          ))}
-        </div>
-
-        {err && <p className="err" style={{ marginTop: 14 }}>{err}</p>}
-
-        <div className="resend">
-          {wait > 0 && !locked ? (
+        <div className="resend" style={{ marginTop: 20 }}>
+          {wait > 0 ? (
             <span className="meta">Didn't get it? You can send another in {wait}s.</span>
           ) : (
-            <button className="peek" style={{ margin: 0 }} onClick={() => { onResend(); setDigits(Array(CODE_LEN).fill("")); setErr(null); }}>
-              Send another code
+            <button className="peek" style={{ margin: 0 }} onClick={() => { onResend(); setSent(true); }}>
+              {sent ? "Sent — check your inbox" : "Send another link"}
             </button>
           )}
         </div>
-
       </div>
 
       <div className="authfoot">
@@ -3491,7 +3417,6 @@ function Auth({ start, pendingProfile }) {
   const [why, setWhy] = useState(null);
   const [dob, setDob] = useState("");
   const [sentAt, setSentAt] = useState(0);
-  const [tries, setTries] = useState(0);
 
   useEffect(() => {
     if (pendingProfile && mode === "welcome") {
@@ -3525,7 +3450,6 @@ function Auth({ start, pendingProfile }) {
       setBusy(false);
       if (error) { setErr({ email: error.message }); return; }
       setSentAt(Date.now());
-      setTries(0);
       setMode("verify");
     } else {
       const { error } = await supabase.auth.signInWithPassword({ email, password: pw });
@@ -3571,17 +3495,13 @@ function Auth({ start, pendingProfile }) {
 
   if (mode === "verify") {
     return (
-      <Verify
+      <CheckEmail
         email={email}
         sentAt={sentAt}
-        tries={tries}
-        setTries={setTries}
         onResend={async () => {
           setSentAt(Date.now());
-          setTries(0);
           await supabase.auth.resend({ type: "signup", email });
         }}
-        onDone={() => setMode("level")}
         onBack={() => setMode("signup")}
       />
     );
@@ -5689,11 +5609,6 @@ main{padding-bottom:34px;}
 @keyframes shk{10%,90%{transform:translateX(-2px)}20%,80%{transform:translateX(4px)}
  30%,50%,70%{transform:translateX(-7px)}40%,60%{transform:translateX(7px)}}
 .resend{margin-top:18px;}
-.devnote{margin-top:26px;border:1px dashed var(--iron);border-radius:12px;padding:14px;}
-.devnote p{font-size:11.5px;color:var(--dust);line-height:1.5;margin:7px 0 0;}
-.devnote b{color:var(--neon);font-family:'Archivo';font-variation-settings:'wght' 800;
-  font-size:14px;letter-spacing:.14em;}
-.devnote code{font-family:ui-monospace,monospace;font-size:11px;color:var(--chalk);}
 
 .hint{display:block;font-size:11px;color:var(--dust);margin-top:7px;}
 
