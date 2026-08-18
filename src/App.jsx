@@ -722,6 +722,10 @@ export default function Skilxz() {
       setTier("life");
       setTierEmail(email);
       setToast("Founder account — Lifetime unlocked");
+    } else if (u.tier && u.tier !== "free") {
+      // Granted by a real purchase (Whop webhook), stored on the Supabase account.
+      setTier(u.tier);
+      setTierEmail(email);
     } else if (tierEmail !== email) {
       // A plan belongs to the account that bought it, not the handset.
       setTier("free");
@@ -742,7 +746,7 @@ export default function Skilxz() {
       const meta = session.user.user_metadata || {};
       const email = session.user.email;
       if (meta.lvl) {
-        start({ name: meta.name || email.split("@")[0], email, lvl: meta.lvl, goal: meta.goal || [], why: meta.why || "", age: meta.age ?? null });
+        start({ name: meta.name || email.split("@")[0], email, lvl: meta.lvl, goal: meta.goal || [], why: meta.why || "", age: meta.age ?? null, tier: meta.tier });
       } else {
         setPendingProfile({ name: meta.name || email.split("@")[0], email });
       }
